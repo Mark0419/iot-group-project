@@ -1,6 +1,7 @@
 # My Iot Project
 
-Week 3 Lab task by kah jiet
+Week 3 Lab task
+Modify by Tan Kah Jiet new
 ----------------------------
 kah jiet 
 mark 
