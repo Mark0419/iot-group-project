@@ -3,8 +3,6 @@
 Week 3 Lab task
 ----------------------------
 kah jiet 
-mark 
-yongjie
-
+mark
 
 modified by ER
