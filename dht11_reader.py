@@ -1,5 +1,7 @@
 import Adafruit_DHT
 
+Adafruit_DHT.common.get_platform = lambda:2
+
 SENSOR = Adafruit_DHT.DHT11
 PIN = 4
 
