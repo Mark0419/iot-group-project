@@ -1,11 +1,15 @@
-import random
-import time
+import Adafruit_DHT
+
+SENSOR = Adafruit_DHT.DHT11
+PIN = 4
 
 def read_dht11():
-    """Simulates reading temperature and humidity"""
-    temperature = round(random.uniform(22.0, 26.0), 1)
-    humidity = round(random.uniform(50.0, 60.0), 1)
-    return temperature, humidity
+    humidity, temperature = Adafruit_DHT.read_retry(SENSOR, PIN)
+    if humidity is not None and temperature is not None:
+        return round(temperature, 1), round(humidity, 1)
+    else:
+        print("Failed to read sensor")
+    return None, None
 
 if __name__ == "__main__":
     temp, hum = read_dht11()
