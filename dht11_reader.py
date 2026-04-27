@@ -1,17 +1,30 @@
-import Adafruit_DHT
+from pigpio_dht import DHT11
+import time
 
-SENSOR = Adafruit_DHT.DHT11
-PIN = 4
+# Initialize the sensor on GPIO 17
+# Note: pigpio uses BCM GPIO numbers, not physical pin numbers!
+gpio_pin = 17
+sensor = DHT11(gpio_pin)
 
-def read_dht11():
-    humidity, temperature = Adafruit_DHT.read_retry(SENSOR, PIN)
-    if humidity is not None and temperature is not None:
-        return round(temperature, 1), round(humidity, 1)
-    else:
-        print("Failed to read sensor")
-    return None, None
+print(f"Starting Hardware-DMA sensor read on GPIO {gpio_pin}. Press Ctrl+C to quit.")
 
-if __name__ == "__main__":
-    temp, hum = read_dht11()
-    if temp:
-        print(f"Temperature: {temp}C, Humidity: {hum}%")
+while True:
+    try:
+        # The read() function automatically handles retries and timing
+        result = sensor.read()
+        
+        # The result is a dictionary containing the data and a 'valid' flag
+        if result.get('valid'):
+            temp = result.get('temp_c')
+            hum = result.get('humidity')
+            print(f"Success! Temperature: {temp}°C, Humidity: {hum}%")
+        else:
+            print("Checksum failed or missed signal. Retrying...")
+            
+    except TimeoutError:
+        print("Sensor not responding. Check wiring to GPIO 17.")
+    except Exception as e:
+        print(f"Error: {e}")
+        
+    # Wait 2 seconds before the next read
+    time.sleep(2)
