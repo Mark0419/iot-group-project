@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from dotenv import load_dotenv
 
+# Load secrets from .env file
 load_dotenv()
 
 # Configuration
@@ -28,44 +29,78 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
             temperature REAL NOT NULL,
-            humidity REAL NOT NULL
+            humidity REAL NOT NULL,
+            synced INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
     conn.close()
 
 def save_reading(temperature, humidity):
-    """Save sensor reading to local database"""
+    """Save sensor reading and return its ID"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
+    
+    # Notice we insert 0 for synced initially
     cursor.execute(
-        "INSERT INTO readings (timestamp, temperature, humidity) VALUES (?, ?, ?)",
+        "INSERT INTO readings (timestamp, temperature, humidity, synced) VALUES (?, ?, ?, 0)",
         (timestamp, temperature, humidity)
     )
+    reading_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return reading_id
+
+def mark_as_synced(reading_id):
+    """Update database to show data reached the cloud"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE readings SET synced=1 WHERE id=?", (reading_id,))
     conn.commit()
     conn.close()
 
 def send_to_blynk(temp, humidity):
-    """Send data securely to Blynk cloud"""
+    """Core Blynk push"""
     if not BLYNK_TOKEN:
         raise RuntimeError("BLYNK_AUTH_TOKEN not set in .env")
         
-    # Send temperature to V0
-    r1 = requests.get(
-        f"{BLYNK_BASE}/update",
-        params={"token": BLYNK_TOKEN, "V0": temp},
-        timeout=5
-    )
+    r1 = requests.get(f"{BLYNK_BASE}/update", params={"token": BLYNK_TOKEN, "V0": temp}, timeout=5)
     r1.raise_for_status()
     
-    # Send humidity to V1
-    r2 = requests.get(
-        f"{BLYNK_BASE}/update",
-        params={"token": BLYNK_TOKEN, "V1": humidity},
-        timeout=5
-    )
+    r2 = requests.get(f"{BLYNK_BASE}/update", params={"token": BLYNK_TOKEN, "V1": humidity}, timeout=5)
     r2.raise_for_status()
+
+def send_to_blynk_safe(temp, humidity, reading_id):
+    """Wraps the push in a try/except to catch failures"""
+    try:
+        send_to_blynk(temp, humidity)
+        mark_as_synced(reading_id)
+        logging.info(f"Success! Data sent and synced (ID: {reading_id})")
+        return True
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        logging.error("Network unavailable - Data buffered locally.")
+        return False
+    except Exception as e:
+        logging.error(f"Cloud send failed: {e}. Data buffered locally.")
+        return False
+
+def resend_unsynced():
+    """Look for stranded data and resend it"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, temperature, humidity FROM readings WHERE synced=0")
+    rows = cursor.fetchall()
+    
+    if rows:
+        logging.info(f"Attempting to resend {len(rows)} buffered readings...")
+        
+    for row in rows:
+        reading_id, temp, hum = row
+        time.sleep(0.5) # Prevent rate-limiting when sending a backlog
+        send_to_blynk_safe(temp, hum, reading_id)
+        
+    conn.close()
 
 if __name__ == "__main__":
     init_database()
@@ -79,25 +114,20 @@ if __name__ == "__main__":
                 temp = result.get('temp_c')
                 hum = result.get('humidity')
                 
-                # 1. Save locally first (Always!)
-                save_reading(temp, hum)
+                # 1. Save locally and get the row ID
+                reading_id = save_reading(temp, hum)
                 
-                # 2. Attempt to push to cloud with error handling [cite: 990-1000]
-                try:
-                    send_to_blynk(temp, hum)
-                    logging.info(f"Success! Temp: {temp}°C, Hum: {hum}% | Data saved locally & sent to Blynk!")
-                except requests.exceptions.Timeout:
-                    logging.error("Blynk timeout - Data saved locally only.")
-                except requests.exceptions.ConnectionError:
-                    logging.error("Network unavailable - Data saved locally only.")
-                except Exception as e:
-                    logging.error(f"Unexpected cloud error: {e}")
+                # 2. Try to send the current reading
+                send_to_blynk_safe(temp, hum, reading_id)
+                
+                # 3. Check for and send any past data that failed
+                resend_unsynced()
                 
             else:
                 logging.warning("Checksum failed or missed signal. Retrying...")
                 
         except TimeoutError:
-            logging.error("Sensor not responding. Check wiring to GPIO 17.")
+            logging.error("Sensor not responding. Check wiring.")
         except Exception as e:
             logging.error(f"Hardware Error: {e}")
             
